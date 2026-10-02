@@ -1,158 +1,98 @@
-import ipaddress
+"""Advanced scanning capabilities for network server discovery."""
+
+import asyncio
 import socket
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set, Tuple
+from dataclasses import dataclass
+from datetime import datetime
+import logging
 
-from .dns_enum import dns_enumerate, is_private_ip, reverse_dns_lookup
-from .fingerprinter import BannerFingerprinter, VirtualHostDiscovery
-from .models import HostInfo, ScanResult, ServiceInfo, VHostInfo
+logger = logging.getLogger(__name__)
 
 
-class AdvancedNetworkScanner:
-    """Advanced network scanner for server discovery, vhost detection, and DNS enumeration."""
+@dataclass
+class ScanResult:
+    """Result of a network scan."""
+    host: str
+    port: int
+    is_open: bool
+    service: Optional[str] = None
+    version: Optional[str] = None
+    response_time: float = 0.0
+    timestamp: datetime = None
 
-    DEFAULT_PORTS = [
-        21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143, 443, 445, 993, 995,
-        1433, 1521, 1723, 3306, 3307, 3389, 5432, 5900, 5901, 6379, 8000,
-        8080, 8443, 8445, 8888, 9000, 9200, 27017, 27018, 27019
-    ]
+    def __post_init__(self):
+        if self.timestamp is None:
+            self.timestamp = datetime.now()
 
-    def __init__(
-        self,
-        target: str,
-        ports: Optional[List[int]] = None,
-        timeout: float = 1.5,
-        threads: int = 20,
-        mode: str = "network",
-        vhost_scan: bool = False,
-        dns_enum: bool = False,
-    ) -> None:
-        self.target = target
-        self.ports = list(ports) if ports else self.DEFAULT_PORTS
+
+class AdvancedScanner:
+    """Advanced network scanner with multiple techniques."""
+
+    def __init__(self, timeout: int = 5, max_workers: int = 50):
         self.timeout = timeout
-        self.threads = max(1, int(threads))
-        self.mode = mode
-        self.vhost_scan = vhost_scan
-        self.dns_enum_enabled = dns_enum
-        self.offline_servers: List[Dict[str, object]] = []
+        self.max_workers = max_workers
+        self.common_ports = {
+            22: 'ssh',
+            80: 'http',
+            443: 'https',
+            3306: 'mysql',
+            5432: 'postgresql',
+            6379: 'redis',
+            27017: 'mongodb',
+            8080: 'http-alt',
+            8443: 'https-alt',
+        }
 
-    def _resolve_targets(self) -> List[str]:
+    async def scan_host(self, host: str, ports: Optional[List[int]] = None) -> List[ScanResult]:
+        """Scan a host for open ports."""
+        if ports is None:
+            ports = list(self.common_ports.keys())
+
+        tasks = [self._check_port(host, port) for port in ports]
+        results = await asyncio.gather(*tasks)
+        return [r for r in results if r is not None]
+
+    async def _check_port(self, host: str, port: int) -> Optional[ScanResult]:
+        """Check if a port is open."""
         try:
-            return [str(ipaddress.ip_address(self.target))]
-        except ValueError:
-            pass
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(host, port),
+                timeout=self.timeout
+            )
+            service = self.common_ports.get(port, 'unknown')
+            writer.close()
+            await writer.wait_closed()
+            return ScanResult(host=host, port=port, is_open=True, service=service)
+        except (asyncio.TimeoutError, OSError, ConnectionRefusedError):
+            return ScanResult(host=host, port=port, is_open=False)
 
-        try:
-            network = ipaddress.ip_network(self.target, strict=False)
-            if network.num_addresses > 1:
-                return [str(ip) for ip in network.hosts()]
-            return [str(network.network_address)]
-        except ValueError:
-            pass
-
-        try:
-            infos = socket.getaddrinfo(self.target, None, proto=socket.IPPROTO_TCP)
-            ips = []
-            for info in infos:
-                ip = info[4][0]
-                if ip not in ips:
-                    ips.append(ip)
-            return ips
-        except socket.gaierror as exc:
-            raise ValueError(f"Could not resolve target: {self.target}") from exc
-
-    def _scan_host(self, ip: str) -> HostInfo:
-        hostname = None
-        try:
-            hostname = socket.getfqdn(ip)
-        except OSError:
-            pass
-
-        if not hostname or hostname == ip:
-            reverse = reverse_dns_lookup(ip)
-            if reverse:
-                hostname = reverse
-
-        services: List[ServiceInfo] = []
-        open_ports: List[int] = []
-        vhosts: List[VHostInfo] = []
-
-        for port in self.ports:
+    def scan_network(self, network: str) -> List[ScanResult]:
+        """Scan a network range for active hosts."""
+        # Parse CIDR notation
+        import ipaddress
+        net = ipaddress.ip_network(network, strict=False)
+        results = []
+        
+        for ip in list(net.hosts())[:255]:  # Limit to reasonable number
             try:
-                with socket.create_connection((ip, port), timeout=self.timeout) as sock:
-                    banner = BannerFingerprinter.probe_service(sock, port, self.timeout)
-                    service_name, confidence = BannerFingerprinter.fingerprint_banner(port, banner)
+                result = asyncio.run(self._check_host(str(ip)))
+                if result:
+                    results.append(result)
+            except Exception as e:
+                logger.debug(f"Error scanning {ip}: {e}")
+        
+        return results
 
-                    service = ServiceInfo(
-                        name=service_name,
-                        port=port,
-                        protocol="tcp",
-                        status="open",
-                        banner=banner,
-                        confidence=confidence,
-                    )
-                    services.append(service)
-                    open_ports.append(port)
-
-                    if self.vhost_scan and service_name in {"HTTP", "HTTPS"}:
-                        discovered = VirtualHostDiscovery.discover_vhosts(ip, port, hostname, self.timeout)
-                        for entry in discovered:
-                            vhosts.append(
-                                VHostInfo(
-                                    vhost=entry["vhost"],
-                                    ip=entry["ip"],
-                                    port=int(entry["port"]),
-                                    protocol=entry["protocol"],
-                                    status=entry["status"],
-                                )
-                            )
-            except (OSError, socket.timeout):
-                continue
-
-        return HostInfo(
-            ip=ip,
-            hostname=hostname,
-            alive=bool(open_ports),
-            open_ports=sorted(open_ports),
-            services=services,
-            vhosts=vhosts,
-            is_private=is_private_ip(ip),
-        )
-
-    def add_offline_server(self, ip: str, hostname: str, services: Optional[List[str]] = None) -> None:
-        self.offline_servers.append({
-            "ip": ip,
-            "hostname": hostname,
-            "services": services or [],
-            "status": "offline",
-        })
-
-    def scan(self) -> ScanResult:
-        started_at = datetime.now(timezone.utc)
-        targets = self._resolve_targets()
-
-        hosts: List[HostInfo] = []
-        with ThreadPoolExecutor(max_workers=min(self.threads, max(1, len(targets)))) as executor:
-            futures = {executor.submit(self._scan_host, ip): ip for ip in targets}
-            for future in as_completed(futures):
-                host = future.result()
-                if host.alive or self.mode == "host":
-                    hosts.append(host)
-
-        hosts = sorted(hosts, key=lambda h: [int(part) for part in h.ip.split(".") if part.isdigit()])
-
-        dns_results = []
-        if self.dns_enum_enabled:
-            candidate = self.target if "." in self.target else None
-            if candidate and not is_private_ip(candidate):
-                dns_results = dns_enumerate(candidate)
-
-        return ScanResult(
-            target=self.target,
-            started_at=started_at,
-            completed_at=datetime.now(timezone.utc),
-            hosts=hosts,
-            offline_servers=self.offline_servers,
-            dns_results=dns_results,
-        )
+    async def _check_host(self, host: str) -> Optional[ScanResult]:
+        """Check if a host is alive."""
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(host, 80),
+                timeout=1
+            )
+            writer.close()
+            await writer.wait_closed()
+            return ScanResult(host=host, port=80, is_open=True)
+        except Exception:
+            return None
