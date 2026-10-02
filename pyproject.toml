@@ -1,0 +1,8 @@
+import json
+
+from network_server_discovery import NetworkScanner
+
+
+scanner = NetworkScanner("127.0.0.1", ports=[22, 80, 443, 3306], timeout=1.0)
+result = scanner.scan()
+print(json.dumps(result.to_dict(), indent=2))
