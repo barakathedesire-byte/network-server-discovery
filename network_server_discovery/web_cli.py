@@ -4,8 +4,9 @@ from .web import app
 
 
 def run_web_server():
-    app.static_folder = str(Path(__file__).resolve().parent.parent / "static")
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    host = "0.0.0.0"
+    port = 5000
+    app.run(host=host, port=port, debug=False, use_reloader=False)
 
 
 if __name__ == "__main__":
