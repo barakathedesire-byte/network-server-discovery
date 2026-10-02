@@ -5,26 +5,53 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Network Server Discovery</title>
   <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      font-family: Arial, sans-serif;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
       background: linear-gradient(135deg, #0b1021, #1b2a49);
       color: #eaf2ff;
-      margin: 0;
+      min-height: 100vh;
       padding: 20px;
     }
     .container {
-      max-width: 1200px;
+      max-width: 1400px;
       margin: 0 auto;
-      background: rgba(13, 17, 31, 0.9);
+      background: rgba(13, 17, 31, 0.95);
       border: 1px solid rgba(255,255,255,0.1);
       border-radius: 12px;
       overflow: hidden;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.4);
     }
     header {
       background: linear-gradient(135deg, #23395d, #3c6bb0);
-      padding: 24px 28px;
+      padding: 30px 28px;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
     }
-    h1 { margin: 0; }
+    h1 { margin: 0; font-size: 1.8em; }
+    .tabs {
+      display: flex;
+      gap: 10px;
+      background: rgba(255,255,255,0.02);
+      padding: 10px 28px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+    .tab {
+      padding: 10px 20px;
+      cursor: pointer;
+      background: transparent;
+      color: #dfeaff;
+      border: none;
+      border-bottom: 2px solid transparent;
+      font-weight: 600;
+      transition: all 0.2s;
+    }
+    .tab.active {
+      border-bottom-color: #4f9cff;
+      color: #4f9cff;
+    }
+    .tab:hover {
+      color: #7db8ff;
+    }
     .warning {
       background: #4d3b00;
       border-left: 4px solid #ffca3a;
@@ -34,10 +61,19 @@
       border-radius: 4px;
     }
     .content {
+      padding: 24px;
+    }
+    .tab-content {
+      display: none;
+    }
+    .tab-content.active {
+      display: block;
+    }
+    .panel-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 20px;
-      padding: 24px;
+      margin-bottom: 24px;
     }
     .panel {
       background: rgba(255,255,255,0.03);
@@ -52,14 +88,15 @@
       color: #dfeaff;
       font-weight: 600;
     }
-    input, button {
+    input, select, button {
       width: 100%;
       padding: 10px 12px;
       border-radius: 8px;
       border: 1px solid rgba(255,255,255,0.12);
       font-size: 1rem;
+      font-family: inherit;
     }
-    input {
+    input, select {
       background: rgba(9,13,21,0.9);
       color: #f2f6ff;
     }
@@ -70,6 +107,11 @@
       border: none;
       cursor: pointer;
       font-weight: 700;
+      transition: all 0.2s;
+    }
+    button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 5px 15px rgba(79, 156, 255, 0.3);
     }
     .checkboxes {
       display: flex;
@@ -81,13 +123,50 @@
       display: inline-flex;
       align-items: center;
       gap: 8px;
+      margin-top: 0;
+      margin-bottom: 0;
     }
     .results {
-      grid-column: 1 / -1;
       background: rgba(255,255,255,0.02);
       border: 1px solid rgba(255,255,255,0.08);
       border-radius: 10px;
       padding: 20px;
+      max-height: 700px;
+      overflow-y: auto;
+    }
+    .history-list {
+      list-style: none;
+    }
+    .history-item {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .history-info {
+      flex: 1;
+    }
+    .history-info strong {
+      color: #4f9cff;
+    }
+    .history-info .small {
+      font-size: 0.9rem;
+      color: #cfe3ff;
+      margin-top: 4px;
+    }
+    .history-actions {
+      display: flex;
+      gap: 8px;
+    }
+    .action-btn {
+      padding: 6px 12px;
+      font-size: 0.9rem;
+      width: auto;
+      margin: 0;
     }
     .summary {
       margin-bottom: 18px;
@@ -95,6 +174,21 @@
       background: rgba(71, 116, 255, 0.12);
       border: 1px solid rgba(120, 157, 255, 0.4);
       border-radius: 8px;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+    }
+    .summary-item {
+      text-align: center;
+    }
+    .summary-label {
+      font-size: 0.9rem;
+      color: #cfe3ff;
+    }
+    .summary-value {
+      font-size: 1.3em;
+      color: #7db8ff;
+      font-weight: bold;
     }
     .host-card {
       background: rgba(255,255,255,0.03);
@@ -102,6 +196,10 @@
       border-radius: 8px;
       margin-bottom: 14px;
       border: 1px solid rgba(255,255,255,0.08);
+    }
+    .host-card h3 {
+      margin: 0 0 8px 0;
+      color: #7db8ff;
     }
     .badge {
       display: inline-block;
@@ -120,6 +218,7 @@
       padding: 8px 10px;
       border-radius: 6px;
       font-family: monospace;
+      font-size: 0.9rem;
     }
     .vhost {
       background: rgba(106, 191, 255, 0.08);
@@ -127,10 +226,43 @@
       padding: 8px 10px;
       margin-top: 6px;
       border-radius: 4px;
+      font-size: 0.9rem;
     }
     .small {
       font-size: 0.9rem;
       color: #cfe3ff;
+    }
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: #cfe3ff;
+    }
+    .spinner {
+      border: 4px solid rgba(79, 156, 255, 0.2);
+      border-top: 4px solid #4f9cff;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 10px;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .export-buttons {
+      display: flex;
+      gap: 8px;
+      margin-top: 16px;
+    }
+    .export-btn {
+      flex: 1;
+      background: #28a745;
+      padding: 8px;
+      font-size: 0.95rem;
+    }
+    .export-btn:hover {
+      background: #218838;
     }
   </style>
 </head>
@@ -140,59 +272,88 @@
       <h1>🔎 Network Server Discovery</h1>
     </header>
 
-    <div class="warning">
-      This tool is for authorized network discovery and permitted security assessments only. Ensure you have explicit permission before scanning any network or system.
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab('scan')">Scan</button>
+      <button class="tab" onclick="switchTab('history')">History</button>
     </div>
 
-    <div class="content">
-      <div class="panel">
-        <h2>Scan Configuration</h2>
-        <form id="scanForm">
-          <label for="target">Target</label>
-          <input id="target" type="text" placeholder="192.168.1.0/24 or example.com" required />
+    <div class="warning">
+      This tool is for authorized network discovery only. Ensure you have explicit permission before scanning any network or system.
+    </div>
 
-          <label for="ports">Ports (comma-separated)</label>
-          <input id="ports" type="text" placeholder="22,80,443,3306" />
+    <!-- Scan Tab -->
+    <div id="scan" class="tab-content active">
+      <div class="content">
+        <div class="panel-grid">
+          <div class="panel">
+            <h2>Scan Configuration</h2>
+            <form id="scanForm">
+              <label for="target">Target</label>
+              <input id="target" type="text" placeholder="192.168.1.0/24 or example.com" required />
 
-          <label for="threads">Threads</label>
-          <input id="threads" type="number" value="20" min="1" max="100" />
+              <label for="ports">Ports (comma-separated)</label>
+              <input id="ports" type="text" placeholder="22,80,443,3306" />
 
-          <label for="timeout">Timeout (seconds)</label>
-          <input id="timeout" type="number" value="1.5" min="0.5" max="10" step="0.5" />
+              <label for="threads">Threads</label>
+              <input id="threads" type="number" value="20" min="1" max="100" />
 
-          <div class="checkboxes">
-            <label><input id="vhostScan" type="checkbox" /> Vhost scan</label>
-            <label><input id="dnsEnum" type="checkbox" /> DNS enum</label>
+              <label for="timeout">Timeout (seconds)</label>
+              <input id="timeout" type="number" value="1.5" min="0.5" max="10" step="0.5" />
+
+              <div class="checkboxes">
+                <label><input id="vhostScan" type="checkbox" /> Vhost scan</label>
+                <label><input id="dnsEnum" type="checkbox" /> DNS enum</label>
+              </div>
+
+              <button type="submit">Start scan</button>
+            </form>
           </div>
 
-          <button type="submit">Start scan</button>
-        </form>
+          <div class="panel">
+            <h2>Off-Network Server</h2>
+            <form id="offlineForm">
+              <label for="offlineIp">IP</label>
+              <input id="offlineIp" type="text" placeholder="10.0.0.12" />
+
+              <label for="offlineHost">Hostname</label>
+              <input id="offlineHost" type="text" placeholder="db.internal.local" />
+
+              <label for="offlineServices">Services</label>
+              <input id="offlineServices" type="text" placeholder="SSH, PostgreSQL" />
+
+              <button type="button" onclick="registerOfflineServer()">Register server</button>
+            </form>
+          </div>
+        </div>
+
+        <div class="results" id="resultsContainer">
+          <div class="small">No scan results yet. Start a scan to see results here.</div>
+        </div>
       </div>
+    </div>
 
-      <div class="panel">
-        <h2>Off-Network Server</h2>
-        <form id="offlineForm">
-          <label for="offlineIp">IP</label>
-          <input id="offlineIp" type="text" placeholder="10.0.0.12" />
-
-          <label for="offlineHost">Hostname</label>
-          <input id="offlineHost" type="text" placeholder="db.internal.local" />
-
-          <label for="offlineServices">Services</label>
-          <input id="offlineServices" type="text" placeholder="SSH, PostgreSQL" />
-
-          <button type="button" onclick="registerOfflineServer()">Register server</button>
-        </form>
-      </div>
-
-      <div class="results" id="resultsContainer">
-        <div class="small">No scan results yet.</div>
+    <!-- History Tab -->
+    <div id="history" class="tab-content">
+      <div class="content">
+        <h2>Scan History</h2>
+        <button onclick="loadHistory()" style="margin-bottom: 20px;">Refresh History</button>
+        <ul class="history-list" id="historyList">
+          <li class="small">Loading...</li>
+        </ul>
       </div>
     </div>
   </div>
 
   <script>
     let currentScanId = null;
+
+    function switchTab(tabName) {
+      document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
+      document.querySelectorAll('.tab').forEach(btn => btn.classList.remove('active'));
+      document.getElementById(tabName).classList.add('active');
+      event.target.classList.add('active');
+      if (tabName === 'history') loadHistory();
+    }
 
     document.getElementById('scanForm').addEventListener('submit', async function (event) {
       event.preventDefault();
@@ -204,7 +365,7 @@
       const dnsEnum = document.getElementById('dnsEnum').checked;
 
       const resultsContainer = document.getElementById('resultsContainer');
-      resultsContainer.innerHTML = '<div class="small">Scanning...</div>';
+      resultsContainer.innerHTML = '<div class="loading"><div class="spinner"></div><p>Scanning...</p></div>';
 
       try {
         const response = await fetch('/api/scan', {
@@ -227,10 +388,22 @@
 
     function renderResults(data) {
       const resultsContainer = document.getElementById('resultsContainer');
-      let html = `<div class="summary"><strong>Target:</strong> ${data.target} | <strong>Hosts:</strong> ${data.hosts_discovered} | <strong>Services:</strong> ${data.total_services} | <strong>Duration:</strong> ${data.duration_seconds}s</div>`;
+      let html = `
+        <div class="summary">
+          <div class="summary-item"><div class="summary-label">Target</div><div class="summary-value">${data.target}</div></div>
+          <div class="summary-item"><div class="summary-label">Hosts</div><div class="summary-value">${data.hosts_discovered}</div></div>
+          <div class="summary-item"><div class="summary-label">Services</div><div class="summary-value">${data.total_services}</div></div>
+          <div class="summary-item"><div class="summary-label">Duration</div><div class="summary-value">${data.duration_seconds.toFixed(2)}s</div></div>
+        </div>
+      `;
 
       if (!data.hosts || data.hosts.length === 0) {
         html += '<div class="small">No hosts discovered.</div>';
+        html += `<div class="export-buttons">
+          <button class="export-btn" onclick="exportResults('json')">JSON</button>
+          <button class="export-btn" onclick="exportResults('html')">HTML</button>
+          <button class="export-btn" onclick="exportResults('csv')">CSV</button>
+        </div>`;
         resultsContainer.innerHTML = html;
         return;
       }
@@ -246,8 +419,8 @@
 
         if (host.services && host.services.length) {
           host.services.forEach(service => {
-            const banner = service.banner ? ` - ${service.banner.substring(0, 60)}` : '';
-            html += `<div class="service">${service.name} : ${service.port} (${Math.round(service.confidence * 100)}% confidence)${banner}</div>`;
+            const banner = service.banner ? ` - ${service.banner.substring(0, 40)}` : '';
+            html += `<div class="service">${service.name} : ${service.port} (${Math.round(service.confidence * 100)}%)${banner}</div>`;
           });
         }
 
@@ -269,7 +442,11 @@
         html += '</div>';
       }
 
-      html += `<button type="button" onclick="downloadResults()">Download JSON</button>`;
+      html += `<div class="export-buttons">
+        <button class="export-btn" onclick="exportResults('json')">JSON</button>
+        <button class="export-btn" onclick="exportResults('html')">HTML</button>
+        <button class="export-btn" onclick="exportResults('csv')">CSV</button>
+      </div>`;
       resultsContainer.innerHTML = html;
     }
 
@@ -281,6 +458,11 @@
       const ip = document.getElementById('offlineIp').value.trim();
       const hostname = document.getElementById('offlineHost').value.trim();
       const services = document.getElementById('offlineServices').value.split(',').map(s => s.trim()).filter(Boolean);
+
+      if (!ip || !hostname) {
+        alert('Please fill IP and hostname.');
+        return;
+      }
 
       fetch('/api/offline-server', {
         method: 'POST',
@@ -296,10 +478,76 @@
       });
     }
 
-    function downloadResults() {
+    function exportResults(format) {
       if (!currentScanId) return;
-      window.location.href = `/api/scan/${currentScanId}/export`;
+      window.location.href = `/api/scan/${currentScanId}/export?format=${format}`;
     }
+
+    async function loadHistory() {
+      const historyList = document.getElementById('historyList');
+      historyList.innerHTML = '<li class="small">Loading...</li>';
+      try {
+        const response = await fetch('/api/history');
+        const json = await response.json();
+        const scans = json.scans || {};
+        if (Object.keys(scans).length === 0) {
+          historyList.innerHTML = '<li class="small">No scan history yet.</li>';
+          return;
+        }
+        historyList.innerHTML = '';
+        for (const [scanId, scanInfo] of Object.entries(scans).reverse()) {
+          const item = document.createElement('li');
+          item.className = 'history-item';
+          item.innerHTML = `
+            <div class="history-info">
+              <strong>${scanInfo.target}</strong>
+              <div class="small">Hosts: ${scanInfo.hosts_discovered} | Services: Found | Started: ${new Date(scanInfo.started_at).toLocaleString()}</div>
+            </div>
+            <div class="history-actions">
+              <button class="action-btn" onclick="viewScan('${scanId}')">View</button>
+              <button class="action-btn" onclick="exportScan('${scanId}', 'json')">Export</button>
+              <button class="action-btn" onclick="deleteScan('${scanId}')">Delete</button>
+            </div>
+          `;
+          historyList.appendChild(item);
+        }
+      } catch (error) {
+        historyList.innerHTML = `<li class="small" style="color:#ffb4b4;">Error: ${error.message}</li>`;
+      }
+    }
+
+    async function viewScan(scanId) {
+      try {
+        const response = await fetch(`/api/scan/${scanId}`);
+        const json = await response.json();
+        currentScanId = scanId;
+        renderResults(json.data);
+        switchTab('scan');
+      } catch (error) {
+        alert('Error loading scan: ' + error.message);
+      }
+    }
+
+    function exportScan(scanId, format) {
+      window.location.href = `/api/scan/${scanId}/export?format=${format}`;
+    }
+
+    async function deleteScan(scanId) {
+      if (!confirm('Delete this scan?')) return;
+      try {
+        const response = await fetch(`/api/scan/${scanId}/delete`, { method: 'DELETE' });
+        if (response.ok) {
+          loadHistory();
+        } else {
+          alert('Failed to delete scan.');
+        }
+      } catch (error) {
+        alert('Error: ' + error.message);
+      }
+    }
+
+    // Load history on page load
+    setTimeout(() => loadHistory(), 1000);
   </script>
 </body>
 </html>

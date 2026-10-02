@@ -5,17 +5,19 @@ import io
 import json
 
 from .advanced_scanner import AdvancedNetworkScanner
+from .reporting import ReportGenerator, ScanHistory
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder="../static", template_folder="../templates")
 CORS(app)
 
 scan_results = {}
 scan_counter = 0
+scan_history = ScanHistory()
 
 
 @app.route("/")
 def index():
-    return app.send_static_file("index.html")
+    return app.send_static_file("index.html") if app.static_folder else "Web UI"
 
 
 @app.route("/api/scan", methods=["POST"])
@@ -47,8 +49,10 @@ def start_scan():
             dns_enum=bool(data.get("dns_enum", False)),
         )
         result = scanner.scan()
+        scan_data = result.to_dict()
         scan_results[scan_id] = result
-        return jsonify({"scan_id": scan_id, "summary": result.summary(), "data": result.to_dict()}), 200
+        scan_history.save_scan(scan_id, scan_data)
+        return jsonify({"scan_id": scan_id, "summary": result.summary(), "data": scan_data}), 200
     except Exception as exc:
         return jsonify({"error": str(exc)}), 400
 
@@ -57,20 +61,58 @@ def start_scan():
 def get_scan(scan_id: str):
     result = scan_results.get(scan_id)
     if not result:
+        # Try to load from history
+        scan_data = scan_history.get_scan(scan_id)
+        if scan_data:
+            return jsonify({"scan_id": scan_id, "data": scan_data}), 200
         return jsonify({"error": "Scan not found"}), 404
     return jsonify({"scan_id": scan_id, "summary": result.summary(), "data": result.to_dict()}), 200
 
 
+@app.route("/api/history", methods=["GET"])
+def get_history():
+    """Retrieve scan history."""
+    history = scan_history.get_history()
+    return jsonify({"scans": history}), 200
+
+
+@app.route("/api/scan/<scan_id>/delete", methods=["DELETE"])
+def delete_scan(scan_id: str):
+    """Delete a scan from history."""
+    if scan_id in scan_results:
+        del scan_results[scan_id]
+    if scan_history.delete_scan(scan_id):
+        return jsonify({"success": True}), 200
+    return jsonify({"error": "Scan not found"}), 404
+
+
 @app.route("/api/scan/<scan_id>/export", methods=["GET"])
 def export_scan(scan_id: str):
+    """Export scan results as JSON."""
     result = scan_results.get(scan_id)
     if not result:
-        return jsonify({"error": "Scan not found"}), 404
+        scan_data = scan_history.get_scan(scan_id)
+        if not scan_data:
+            return jsonify({"error": "Scan not found"}), 404
+    else:
+        scan_data = result.to_dict()
 
-    payload = json.dumps(result.to_dict(), indent=2).encode("utf-8")
-    buffer = io.BytesIO(payload)
-    buffer.seek(0)
-    return send_file(buffer, as_attachment=True, download_name=f"scan_{scan_id}.json", mimetype="application/json")
+    fmt = request.args.get("format", "json")
+    if fmt == "html":
+        html_content = ReportGenerator.generate_html(scan_data)
+        buffer = io.BytesIO(html_content.encode("utf-8"))
+        buffer.seek(0)
+        return send_file(buffer, as_attachment=True, download_name=f"scan_{scan_id}.html", mimetype="text/html")
+    elif fmt == "csv":
+        csv_content = ReportGenerator.generate_csv(scan_data)
+        buffer = io.BytesIO(csv_content.encode("utf-8"))
+        buffer.seek(0)
+        return send_file(buffer, as_attachment=True, download_name=f"scan_{scan_id}.csv", mimetype="text/csv")
+    else:
+        payload = json.dumps(scan_data, indent=2).encode("utf-8")
+        buffer = io.BytesIO(payload)
+        buffer.seek(0)
+        return send_file(buffer, as_attachment=True, download_name=f"scan_{scan_id}.json", mimetype="application/json")
 
 
 @app.route("/api/offline-server", methods=["POST"])
