@@ -1,202 +1,175 @@
-import os
-from pathlib import Path
+"""Web interface for network server discovery."""
 
-from flask import Flask, jsonify, render_template, request, send_file
-from flask_cors import CORS
+from flask import Flask, render_template, request, jsonify
+from typing import Dict, List
+import logging
 
-from .advanced_scanner import AdvancedNetworkScanner
-from .reporting import ReportGenerator, ScanHistory
+logger = logging.getLogger(__name__)
 
 
-def create_app() -> Flask:
-    root_dir = Path(__file__).resolve().parent.parent
-    template_dir = root_dir / "templates"
-    static_dir = root_dir / "static"
+class WebInterface:
+    """Web interface for scanning and visualization."""
 
-    app = Flask(
-        __name__,
-        template_folder=str(template_dir),
-        static_folder=str(static_dir),
-    )
-    app.config["SECRET_KEY"] = os.environ.get("NSD_SECRET_KEY", "change-me-in-production")
-    app.config["JSON_SORT_KEYS"] = False
-    CORS(app)
+    def __init__(self, host: str = '0.0.0.0', port: int = 5000):
+        self.app = Flask(__name__)
+        self.host = host
+        self.port = port
+        self.scan_results = {}
+        self._setup_routes()
 
-    scan_results = {}
-    scan_counter = 0
-    scan_history = ScanHistory()
+    def _setup_routes(self):
+        """Setup Flask routes."""
+        @self.app.route('/')
+        def index():
+            return self.render_dashboard()
 
-    @app.route("/")
-    def index():
-        return render_template("index.html")
+        @self.app.route('/api/scan', methods=['POST'])
+        def start_scan():
+            data = request.json
+            target = data.get('target')
+            scan_type = data.get('type', 'basic')
+            return jsonify({'status': 'started', 'target': target})
 
-    @app.route("/api/scan", methods=["POST"])
-    def start_scan():
-        nonlocal scan_counter
-        data = request.get_json(silent=True) or {}
-        target = data.get("target", "").strip()
-        if not target:
-            return jsonify({"error": "Target is required"}), 400
+        @self.app.route('/api/results')
+        def get_results():
+            return jsonify(self.scan_results)
 
-        if len(target) > 255:
-            return jsonify({"error": "Target is too long"}), 400
+        @self.app.route('/api/results/<target>')
+        def get_target_results(target):
+            return jsonify(self.scan_results.get(target, {}))
 
-        if not _is_allowed_target(target):
-            return jsonify({"error": "Invalid target format"}), 400
+        @self.app.route('/api/history')
+        def get_history():
+            return jsonify({'scans': list(self.scan_results.keys())})
 
-        ports_raw = data.get("ports", "")
-        ports = None
-        if ports_raw:
-            try:
-                ports = [int(p.strip()) for p in ports_raw.split(",") if p.strip()]
-            except ValueError:
-                return jsonify({"error": "Ports must be comma-separated integers"}), 400
-            if len(ports) > 1024:
-                return jsonify({"error": "Too many ports requested"}), 400
+    def render_dashboard(self) -> str:
+        """Render dashboard HTML."""
+        return """<!DOCTYPE html>
+<html>
+<head>
+    <title>Network Server Discovery Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .header { background: #2c3e50; color: white; padding: 20px; border-radius: 5px; margin-bottom: 20px; }
+        .header h1 { font-size: 28px; margin-bottom: 10px; }
+        .card { background: white; padding: 20px; margin-bottom: 20px; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input, select { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; }
+        button { background: #3498db; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        button:hover { background: #2980b9; }
+        .results { margin-top: 20px; }
+        .result-item { background: #ecf0f1; padding: 10px; margin: 5px 0; border-radius: 4px; }
+        .status-active { color: #27ae60; font-weight: bold; }
+        .status-inactive { color: #e74c3c; font-weight: bold; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #34495e; color: white; }
+        tr:hover { background-color: #f5f5f5; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 Network Server Discovery Dashboard</h1>
+            <p>Scan and monitor network servers</p>
+        </div>
 
-        scan_counter += 1
-        scan_id = f"scan_{scan_counter}"
+        <div class="card">
+            <h2>Start Scan</h2>
+            <form id="scanForm">
+                <div class="form-group">
+                    <label for="target">Target (IP/Domain/Network):</label>
+                    <input type="text" id="target" name="target" placeholder="e.g., 192.168.1.0/24 or example.com" required>
+                </div>
+                <div class="form-group">
+                    <label for="scanType">Scan Type:</label>
+                    <select id="scanType" name="scanType">
+                        <option value="quick">Quick Scan</option>
+                        <option value="standard">Standard Scan</option>
+                        <option value="intensive">Intensive Scan</option>
+                        <option value="custom">Custom Scan</option>
+                    </select>
+                </div>
+                <button type="submit">Start Scan</button>
+            </form>
+        </div>
 
-        try:
-            scanner = AdvancedNetworkScanner(
-                target=target,
-                ports=ports,
-                timeout=float(data.get("timeout", 1.5)),
-                threads=min(max(int(data.get("threads", 20)), 1), 128),
-                vhost_scan=bool(data.get("vhost_scan", False)),
-                dns_enum=bool(data.get("dns_enum", False)),
-            )
-            result = scanner.scan()
-            scan_data = result.to_dict()
-            scan_results[scan_id] = result
-            scan_history.save_scan(scan_id, scan_data)
-            return jsonify({"scan_id": scan_id, "summary": result.summary(), "data": scan_data}), 200
-        except Exception as exc:  # pragma: no cover - defensive route guard
-            return jsonify({"error": str(exc)}), 400
+        <div class="card">
+            <h2>Results</h2>
+            <div id="results" class="results">
+                <p>No scans yet. Start a scan to see results.</p>
+            </div>
+        </div>
 
-    @app.route("/api/scan/<scan_id>", methods=["GET"])
-    def get_scan(scan_id: str):
-        result = scan_results.get(scan_id)
-        if result is not None:
-            return jsonify({"scan_id": scan_id, "summary": result.summary(), "data": result.to_dict()}), 200
+        <div class="card">
+            <h2>Recent Scans</h2>
+            <table>
+                <tr>
+                    <th>Target</th>
+                    <th>Scan Type</th>
+                    <th>Status</th>
+                    <th>Results</th>
+                </tr>
+                <tbody id="scanHistory"></tbody>
+            </table>
+        </div>
+    </div>
 
-        scan_data = scan_history.get_scan(scan_id)
-        if scan_data:
-            return jsonify({"scan_id": scan_id, "data": scan_data}), 200
-        return jsonify({"error": "Scan not found"}), 404
-
-    @app.route("/api/history", methods=["GET"])
-    def get_history():
-        return jsonify({"scans": scan_history.get_history()}), 200
-
-    @app.route("/api/scan/<scan_id>/delete", methods=["DELETE"])
-    def delete_scan(scan_id: str):
-        scan_results.pop(scan_id, None)
-        if scan_history.delete_scan(scan_id):
-            return jsonify({"success": True}), 200
-        return jsonify({"error": "Scan not found"}), 404
-
-    @app.route("/api/scan/<scan_id>/export", methods=["GET"])
-    def export_scan(scan_id: str):
-        result = scan_results.get(scan_id)
-        if result is not None:
-            scan_data = result.to_dict()
-        else:
-            scan_data = scan_history.get_scan(scan_id)
-            if not scan_data:
-                return jsonify({"error": "Scan not found"}), 404
-
-        fmt = request.args.get("format", "json").lower()
-        if fmt == "html":
-            payload = ReportGenerator.generate_html(scan_data)
-            mime = "text/html"
-            filename = f"scan_{scan_id}.html"
-        elif fmt == "csv":
-            payload = ReportGenerator.generate_csv(scan_data)
-            mime = "text/csv"
-            filename = f"scan_{scan_id}.csv"
-        else:
-            payload = ReportGenerator.generate_json(scan_data)
-            mime = "application/json"
-            filename = f"scan_{scan_id}.json"
-
-        return send_file(
-            __make_bytes_io(payload),
-            mimetype=mime,
-            as_attachment=True,
-            download_name=filename,
-        )
-
-    @app.route("/api/offline-server", methods=["POST"])
-    def add_offline_server():
-        data = request.get_json(silent=True) or {}
-        scan_id = data.get("scan_id")
-        if scan_id not in scan_results:
-            return jsonify({"error": "Invalid scan_id"}), 400
-
-        ip = str(data.get("ip", "")).strip()
-        hostname = str(data.get("hostname", "")).strip()
-        services = data.get("services", [])
-        if not ip or not hostname:
-            return jsonify({"error": "IP and hostname are required"}), 400
-
-        if not _is_allowed_ip(ip):
-            return jsonify({"error": "Invalid IP format"}), 400
-
-        result = scan_results[scan_id]
-        result.offline_servers.append(
-            {
-                "ip": ip,
-                "hostname": hostname,
-                "services": list(services)[:50],
-                "status": "offline",
+    <script>
+        document.getElementById('scanForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const target = document.getElementById('target').value;
+            const scanType = document.getElementById('scanType').value;
+            
+            try {
+                const response = await fetch('/api/scan', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ target, type: scanType })
+                });
+                const data = await response.json();
+                alert('Scan started for: ' + target);
+                loadResults();
+            } catch (error) {
+                alert('Error starting scan: ' + error.message);
             }
-        )
-        return jsonify({"success": True}), 200
+        });
 
-    @app.route("/api/health", methods=["GET"])
-    def health():
-        return jsonify({"status": "ok"}), 200
+        async function loadResults() {
+            try {
+                const response = await fetch('/api/results');
+                const data = await response.json();
+                updateResultsDisplay(data);
+            } catch (error) {
+                console.error('Error loading results:', error);
+            }
+        }
 
-    return app
+        function updateResultsDisplay(data) {
+            const resultsDiv = document.getElementById('results');
+            if (Object.keys(data).length === 0) {
+                resultsDiv.innerHTML = '<p>No results available.</p>';
+                return;
+            }
+            
+            let html = '';
+            for (const [target, results] of Object.entries(data)) {
+                html += `<div class="result-item"><strong>${target}</strong>: ${JSON.stringify(results).substring(0, 100)}...</div>`;
+            }
+            resultsDiv.innerHTML = html;
+        }
 
+        // Load results on page load and periodically
+        loadResults();
+        setInterval(loadResults, 5000);
+    </script>
+</body>
+</html>"""
 
-def _make_bytes_io(payload: str):
-    buffer = __import__("io").BytesIO(payload.encode("utf-8"))
-    buffer.seek(0)
-    return buffer
-
-
-def _is_allowed_target(value: str) -> bool:
-    value = value.strip()
-    if not value or len(value) > 255:
-        return False
-    if any(ch.isspace() for ch in value):
-        return False
-    if any(ord(ch) < 32 for ch in value):
-        return False
-    if "/" in value:
-        try:
-            import ipaddress
-            ipaddress.ip_network(value, strict=False)
-            return True
-        except ValueError:
-            return False
-    if value.count(":") > 1:
-        return False
-    if "." in value or "-" in value:
-        # allow domain-like names and IPs but reject malformed controls
-        return True
-    return True
-
-
-def _is_allowed_ip(value: str) -> bool:
-    try:
-        import ipaddress
-        ipaddress.ip_address(value)
-        return True
-    except ValueError:
-        return False
-
-
-app = create_app()
+    def run(self, debug: bool = True):
+        """Run the web server."""
+        logger.info(f"Starting web interface on {self.host}:{self.port}")
+        self.app.run(host=self.host, port=self.port, debug=debug)

@@ -1,70 +1,99 @@
-import socket
-from typing import Dict, List, Optional, Set
+"""DNS enumeration and discovery utilities."""
+
+import dns.resolver
+import dns.rdatatype
+import dns.zone
+import dns.query
+from typing import Dict, List, Set, Optional
+from dataclasses import dataclass
+import logging
+
+logger = logging.getLogger(__name__)
 
 
-def resolve_hostname(hostname: str) -> Optional[str]:
-    """Resolve hostname to IP address."""
-    try:
-        return socket.gethostbyname(hostname)
-    except socket.gaierror:
-        return None
+@dataclass
+class DNSRecord:
+    """DNS record information."""
+    domain: str
+    record_type: str
+    value: str
+    ttl: int
 
 
-def reverse_dns_lookup(ip: str) -> Optional[str]:
-    """Perform reverse DNS lookup."""
-    try:
-        return socket.gethostbyaddr(ip)[0]
-    except (socket.herror, socket.error):
-        return None
+class DNSEnumerator:
+    """Enumerate DNS records and discover services."""
 
+    def __init__(self):
+        self.resolver = dns.resolver.Resolver()
+        self.common_subdomains = [
+            'www', 'mail', 'ftp', 'localhost', 'webmail', 'smtp', 'pop', 'ns1', 'webdisk',
+            'ns2', 'cpanel', 'whois', 'autodiscover', 'autoconfig', 'api', 'admin',
+            'dev', 'test', 'staging', 'prod', 'app', 'blog', 'shop', 'store',
+        ]
+        self.record_types = ['A', 'AAAA', 'MX', 'NS', 'TXT', 'CNAME', 'SRV']
 
-def dns_enumerate(domain: str, timeout: float = 2.0) -> List[Dict[str, str]]:
-    """Enumerate DNS records for a domain."""
-    results = []
-    common_subdomains = [
-        "www", "mail", "ftp", "localhost", "webmail", "smtp", "pop", "ns", "admin",
-        "test", "portal", "api", "dev", "staging", "prod", "vpn", "proxy", "git",
-        "jenkins", "docker", "app", "db", "cdn", "storage", "backup",
-    ]
+    def enumerate_subdomains(self, domain: str) -> List[str]:
+        """Enumerate common subdomains."""
+        discovered = []
+        for subdomain in self.common_subdomains:
+            full_domain = f"{subdomain}.{domain}"
+            try:
+                self.resolver.resolve(full_domain, 'A')
+                discovered.append(full_domain)
+                logger.info(f"Found subdomain: {full_domain}")
+            except Exception:
+                pass
+        return discovered
 
-    for subdomain in common_subdomains:
-        hostname = f"{subdomain}.{domain}"
+    def get_dns_records(self, domain: str, record_type: str = 'A') -> List[DNSRecord]:
+        """Get DNS records for a domain."""
+        records = []
         try:
-            ip = socket.gethostbyname(hostname)
-            results.append({"hostname": hostname, "ip": ip})
-        except socket.gaierror:
-            pass
+            answers = self.resolver.resolve(domain, record_type)
+            for rdata in answers:
+                records.append(DNSRecord(
+                    domain=domain,
+                    record_type=record_type,
+                    value=str(rdata),
+                    ttl=answers.rrset.ttl
+                ))
+        except Exception as e:
+            logger.debug(f"Error resolving {domain} for {record_type}: {e}")
+        return records
 
-    return results
+    def get_all_records(self, domain: str) -> Dict[str, List[DNSRecord]]:
+        """Get all DNS records for a domain."""
+        all_records = {}
+        for record_type in self.record_types:
+            all_records[record_type] = self.get_dns_records(domain, record_type)
+        return all_records
 
+    def get_mx_records(self, domain: str) -> List[Dict]:
+        """Get MX records for a domain."""
+        mx_records = []
+        try:
+            answers = self.resolver.resolve(domain, 'MX')
+            for rdata in sorted(answers, key=lambda x: x.preference):
+                mx_records.append({
+                    'preference': rdata.preference,
+                    'exchange': str(rdata.exchange),
+                    'ttl': answers.rrset.ttl
+                })
+        except Exception as e:
+            logger.debug(f"Error getting MX records for {domain}: {e}")
+        return mx_records
 
-def get_all_ips_for_hostname(hostname: str) -> Set[str]:
-    """Get all IP addresses for a hostname."""
-    ips: Set[str] = set()
-    try:
-        for info in socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM):
-            ips.add(info[4][0])
-    except socket.gaierror:
-        pass
-    return ips
-
-
-def is_private_ip(ip: str) -> bool:
-    """Check if an IP is private,"""
-    try:
-        parts = [int(x) for x in ip.split(".")]
-        if len(parts) != 4:
-            return False
-        if parts[0] == 10:
-            return True
-        if parts[0] == 172 and 16 <= parts[1] <= 31:
-            return True
-        if parts[0] == 192 and parts[1] == 168:
-            return True
-        if parts[0] == 127:
-            return True
-        if parts[0] == 169 and parts[1] == 254:
-            return True
-        return False
-    except (ValueError, IndexError):
-        return False
+    def check_zone_transfer(self, domain: str, nameserver: Optional[str] = None) -> Optional[List[str]]:
+        """Attempt AXFR zone transfer."""
+        try:
+            if nameserver is None:
+                ns_records = self.get_dns_records(domain, 'NS')
+                if not ns_records:
+                    return None
+                nameserver = ns_records[0].value.rstrip('.')
+            
+            zone = dns.zone.from_xfr(dns.query.xfr(nameserver, domain))
+            return [str(node) for node in zone.iterate_rdatasets()]
+        except Exception as e:
+            logger.debug(f"Zone transfer failed for {domain}: {e}")
+            return None
