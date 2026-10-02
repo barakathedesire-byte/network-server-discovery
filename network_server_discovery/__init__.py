@@ -1,4 +1,4 @@
-from .scanner import NetworkScanner
+from .advanced_scanner import AdvancedNetworkScanner
 
-__all__ = ["NetworkScanner"]
-__version__ = "0.1.0"
+__all__ = ["AdvancedNetworkScanner"]
+__version__ = "0.2.0"

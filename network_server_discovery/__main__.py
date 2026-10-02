@@ -1,3 +1,4 @@
-from .scanner import NetworkScanner
+from .cli import main
 
-__all__ = ["NetworkScanner"]
+if __name__ == "__main__":
+    raise SystemExit(main())

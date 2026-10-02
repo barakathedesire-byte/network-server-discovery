@@ -1,8 +1,45 @@
-import json
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
 
-from network_server_discovery import NetworkScanner
+[project]
+name = "network-server-discovery"
+version = "0.2.0"
+description = "Advanced network server discovery with vhost detection, DNS enumeration, and web UI"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "barakathedesire-byte", email = "barakathedesire@gmail.com" }
+]
+keywords = ["network", "scanner", "discovery", "security", "inventory", "vhost"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "Flask>=2.3.0",
+    "flask-cors>=4.0.0",
+]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "black>=23.0",
+    "flake8>=6.0",
+]
 
-scanner = NetworkScanner("127.0.0.1", ports=[22, 80, 443, 3306], timeout=1.0)
-result = scanner.scan()
-print(json.dumps(result.to_dict(), indent=2))
+[project.scripts]
+nsd = "network_server_discovery.cli:main"
+nsd-web = "network_server_discovery.web_cli:run_web_server"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
